@@ -140,7 +140,7 @@
   .loader .retry { justify-self: center; border: 1px solid var(--line); background: var(--raised); border-radius: var(--r); padding: 8px 16px; min-height: 40px; cursor: pointer; }
 
   /* annotation tags inside the 3D view */
-  .lbl { font: 600 12.5px/1.15 var(--font); white-space: nowrap; padding: 2px 6px; border-radius: 4px; background: rgba(10, 12, 14, .78); transform: translateY(-50%); }
+  .lbl { font: 600 12.5px/1.3 var(--font); white-space: pre; text-align: center; padding: 2px 6px; border-radius: 4px; background: rgba(10, 12, 14, .78); transform: translateY(-50%); }
   .lbl.big { font-size: 14px; }
   .poi { font: 600 12.5px/1.2 var(--font); color: #fff; white-space: nowrap; padding: 4px 8px; border-radius: 6px; background: rgba(16, 19, 22, .88); border: 1px solid rgba(255, 255, 255, .18); transform: translateY(-50%); }
 
@@ -282,8 +282,8 @@ const NIGHT_EV = 5.6;                       // same exposure boost as the Blende
 const LIGHT_SCALE = 1 / (4 * Math.PI);      // Blender watts -> three.js radiant intensity
 const POINTS = [
   { n: 1, frame: 1, name: "Dozing di Stockpile 1", time: "19.15 WITA" },
-  { n: 2, frame: 521, name: "Berpindah ke Stockpile 2", time: "19.30 WITA" },
-  { n: 3, frame: 723, name: "Kejadian", time: "20.20 WITA" },
+  { n: 2, frame: 521, name: "Dozer MIJ-241 menuju Stockpile 2 untuk memotong kucuran", time: "19.30 WITA" },
+  { n: 3, frame: 723, name: "Dozer MIJ-241 terperosok ke lubang hopper", time: "20.20 WITA" },
 ];
 const CAMERAS = [
   ["Cam_Cinematic", "Cinematic", "1"], ["Cam_POV", "POV Operator", "2"], ["Cam_Atas", "Atas", "3"],
@@ -654,9 +654,9 @@ function setFrame(f) {
   $("clockFrame").textContent = Math.round(f);
   $("clockTime").textContent = fmt((f - 1) / DATA.fps);
   let phase = "1. Dozing di Stockpile 1, 19.15 WITA";
-  if (f >= POINTS[2].frame) phase = "3. Kejadian, 20.20 WITA";
+  if (f >= POINTS[2].frame) phase = "3. Dozer MIJ-241 terperosok ke lubang hopper, 20.20 WITA";
   else if (f >= 617) phase = "Menuju titik 3";
-  else if (f >= POINTS[1].frame) phase = "2. Berpindah ke Stockpile 2, 19.30 WITA";
+  else if (f >= POINTS[1].frame) phase = "2. Menuju Stockpile 2 untuk memotong kucuran, 19.30 WITA";
   else if (f > 48) phase = "Menuju titik 2";
   $("hudPhase").textContent = phase;
 }
