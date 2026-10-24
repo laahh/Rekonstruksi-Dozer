@@ -1,0 +1,769 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Rekonstruksi Dozer CPP</title>
+<meta name="robots" content="noindex, nofollow">
+<style>
+  /*
+    Design read: 3D incident viewer for HSE staff, plain desktop-app style, dark by request.
+    Dials: ENERGY 1 / RHYTHM 1 / MOTION 2 (short hover and open/close transitions only).
+    Why:
+    - Dark: the owner asked for a smooth dark panel; it also keeps attention on the 3D view.
+    - System font: reads like a normal app on each device, no trendy web font.
+    - One muted steel-blue accent, only for the selected item and the playhead.
+    - 8px radius on controls, 12px on the panel: one consistent soft shape, no pills.
+    - No shadows, glow or blur: panel and view are separated by a plain border.
+  */
+  :root {
+    color-scheme: dark;
+    --bg: #131518;
+    --panel: #1b1e22;
+    --raised: #24282d;
+    --hover: #2b3036;
+    --line: #30353b;
+    --text: #e3e5e8;
+    --muted: #a0a6ad;
+    --accent: #8fb1d4;
+    --accent-ink: #12202e;
+    --danger: #f08a7e;
+    --sorot: #5ccf5c;
+    --jarak: #e6bf2e;
+    --ring: #6f98ec;
+    --font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --r: 8px;
+    --panel-w: 300px;
+    --ease: 160ms ease;
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { height: 100%; margin: 0; }
+  body { background: var(--bg); color: var(--text); font: 400 14px/1.45 var(--font); overflow: hidden; -webkit-font-smoothing: antialiased; }
+  button, input { font: inherit; color: inherit; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .app { height: 100%; display: grid; grid-template-columns: minmax(0, 1fr) var(--panel-w); grid-template-rows: minmax(0, 1fr) auto; gap: 10px;
+         padding: max(10px, env(safe-area-inset-top, 0px)) max(10px, env(safe-area-inset-right, 0px)) max(10px, env(safe-area-inset-bottom, 0px)) max(10px, env(safe-area-inset-left, 0px)); }
+
+  #stage { grid-column: 1; grid-row: 1; position: relative; min-width: 0; min-height: 0; overflow: hidden; border-radius: 12px; border: 1px solid var(--line); background: #0b0d0f; }
+  #stage canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+  .labels-layer { position: absolute; inset: 0; pointer-events: none; }
+
+  .view-info { position: absolute; top: 12px; left: 12px; background: rgba(27, 30, 34, .9); border: 1px solid var(--line); border-radius: var(--r); padding: 7px 11px; font-size: 13px; line-height: 1.4; max-width: calc(100% - 84px); }
+  .view-info .sub { color: var(--muted); }
+
+  .north { position: absolute; top: 12px; right: 12px; width: 48px; height: 48px; border-radius: 50%; background: rgba(27, 30, 34, .9); border: 1px solid var(--line); display: grid; place-items: center; }
+  .north svg { width: 38px; height: 38px; }
+
+  .credit { position: absolute; right: 10px; bottom: 8px; font-size: 11px; color: var(--muted); background: rgba(19, 21, 24, .85); padding: 2px 7px; border-radius: 6px; }
+
+  /* side panel */
+  .panel { grid-column: 2; grid-row: 1 / span 2; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+  .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 14px 16px 12px; border-bottom: 1px solid var(--line); }
+  .panel-head h1 { margin: 0; font-size: 16px; font-weight: 600; line-height: 1.25; }
+  .panel-head p { margin: 2px 0 0; font-size: 12.5px; color: var(--muted); }
+  .panel-toggle { display: none; }
+  .panel-body { overflow-y: auto; min-height: 0; padding: 4px 0 12px; scroll-behavior: smooth; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+
+  .sec { padding: 12px 16px 4px; }
+  .sec > h2, .sec > summary { margin: 0 0 8px; font-size: 12.5px; font-weight: 600; color: var(--muted); }
+  details.sec > summary { list-style: none; cursor: pointer; display: flex; justify-content: space-between; align-items: center; border-radius: 6px; }
+  details.sec > summary::-webkit-details-marker { display: none; }
+  details.sec > summary::after { content: ""; width: 7px; height: 7px; border-right: 1.5px solid var(--muted); border-bottom: 1.5px solid var(--muted); transform: rotate(-45deg); transition: transform var(--ease); margin-right: 4px; }
+  details.sec[open] > summary::after { transform: rotate(45deg); }
+
+  .seg { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px; background: var(--bg); border-radius: var(--r); }
+  .seg button { border: 0; border-radius: 6px; background: transparent; min-height: 34px; cursor: pointer; color: var(--muted); transition: background var(--ease), color var(--ease); }
+  .seg button:hover { color: var(--text); }
+  .seg button[aria-pressed="true"] { background: var(--raised); color: var(--text); }
+
+  .list { display: grid; gap: 2px; }
+  .item { display: flex; align-items: center; gap: 10px; width: 100%; border: 0; background: transparent; border-radius: var(--r); padding: 7px 10px; min-height: 36px; text-align: left; cursor: pointer; transition: background var(--ease); }
+  .item:hover { background: var(--hover); }
+  .item .meta { margin-left: auto; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
+  .cell { border: 1px solid transparent; background: var(--raised); border-radius: var(--r); min-height: 36px; padding: 6px 10px; text-align: left; cursor: pointer; display: flex; justify-content: space-between; align-items: center; gap: 6px; transition: background var(--ease), border-color var(--ease); }
+  .cell:hover { background: var(--hover); }
+  .cell[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
+  .cell kbd { font: inherit; font-size: 11.5px; opacity: .65; font-variant-numeric: tabular-nums; }
+  .cell.wide { grid-column: 1 / -1; }
+
+  .num { flex: none; width: 20px; height: 20px; border-radius: 5px; background: var(--raised); color: var(--text); display: grid; place-items: center; font-size: 11.5px; font-weight: 600; }
+
+  .toggle { display: flex; align-items: center; gap: 10px; min-height: 34px; padding: 4px 10px; margin: 0 -10px; border-radius: var(--r); cursor: pointer; transition: background var(--ease); }
+  .toggle:hover { background: var(--hover); }
+  .toggle input { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); }
+  .toggle .sw { width: 18px; height: 0; border-top: 3px solid; border-radius: 2px; flex: none; }
+  .toggle .sw.dash { border-top-style: dashed; }
+  .toggle .hint { margin-left: auto; font-size: 11.5px; color: var(--muted); }
+  .toggle.is-off { color: var(--muted); cursor: default; }
+  .toggle.is-off:hover { background: transparent; }
+  .note { margin: 4px 0 6px; font-size: 12.5px; color: var(--muted); }
+
+  .slider { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; min-height: 34px; }
+  .slider input { width: 100%; accent-color: var(--accent); }
+  .slider output { font-size: 12px; color: var(--muted); min-width: 3ch; text-align: right; font-variant-numeric: tabular-nums; }
+
+  .keys { display: grid; grid-template-columns: auto 1fr; gap: 5px 10px; font-size: 12.5px; color: var(--muted); padding-bottom: 6px; }
+  .keys kbd { font: inherit; font-size: 11.5px; color: var(--text); background: var(--raised); border: 1px solid var(--line); border-radius: 5px; padding: 1px 6px; justify-self: start; }
+
+  .panel-foot { border-top: 1px solid var(--line); padding: 10px 16px; font-size: 12px; color: var(--muted); line-height: 1.5; }
+
+  /* timeline */
+  .timeline { grid-column: 1; grid-row: 2; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; display: grid; grid-template-columns: 44px auto minmax(0, 1fr) auto; gap: 14px; align-items: center; padding: 10px 14px; }
+  .play { width: 44px; height: 44px; border: 0; border-radius: 50%; background: var(--text); color: var(--bg); cursor: pointer; display: grid; place-items: center; transition: opacity var(--ease); }
+  .play:hover { opacity: .88; }
+  .play svg { width: 18px; height: 18px; fill: currentColor; }
+  .speed { display: grid; grid-template-columns: repeat(3, auto); gap: 2px; padding: 3px; background: var(--bg); border-radius: var(--r); }
+  .speed button { border: 0; border-radius: 6px; background: transparent; min-width: 38px; height: 30px; cursor: pointer; color: var(--muted); font-size: 12.5px; transition: background var(--ease), color var(--ease); }
+  .speed button[aria-pressed="true"] { background: var(--raised); color: var(--text); }
+  .track { position: relative; min-width: 0; padding-top: 22px; }
+  .marks { position: absolute; left: 0; right: 0; top: 0; height: 20px; }
+  .marks button { position: absolute; transform: translateX(-50%); border: 0; padding: 0; background: none; cursor: pointer; }
+  .marks .num { width: 18px; height: 18px; font-size: 11px; transition: background var(--ease); }
+  .marks button:hover .num { background: var(--hover); }
+  .scale input { width: 100%; margin: 0; accent-color: var(--accent); cursor: pointer; height: 20px; }
+  .clock { font-size: 12.5px; color: var(--muted); text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; line-height: 1.4; }
+  .clock b { color: var(--text); font-weight: 500; }
+
+  /* loading / error */
+  .loader { position: absolute; inset: 0; display: grid; place-items: center; background: var(--bg); z-index: 5; }
+  .loader .box { width: min(320px, 85%); display: grid; gap: 10px; text-align: center; }
+  .loader strong { font-size: 15px; font-weight: 600; }
+  .loader .bar { height: 4px; border-radius: 2px; background: var(--raised); overflow: hidden; }
+  .loader .bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width 200ms ease; }
+  .loader p { margin: 0; font-size: 12.5px; color: var(--muted); }
+  .loader.error strong { color: var(--danger); }
+  .loader.error p { color: var(--text); }
+  .loader .retry { justify-self: center; border: 1px solid var(--line); background: var(--raised); border-radius: var(--r); padding: 8px 16px; min-height: 40px; cursor: pointer; }
+
+  /* annotation tags inside the 3D view */
+  .lbl { font: 600 12.5px/1.15 var(--font); white-space: nowrap; padding: 2px 6px; border-radius: 4px; background: rgba(10, 12, 14, .78); transform: translateY(-50%); }
+  .lbl.big { font-size: 14px; }
+
+  @media (max-width: 760px) {
+    body { overflow: auto; }
+    .app { height: auto; min-height: 100%; grid-template-columns: 1fr; grid-template-rows: 56vh auto auto; gap: 8px; }
+    .timeline { grid-row: 2; grid-template-columns: 44px minmax(0, 1fr); }
+    .timeline .speed, .timeline .clock { display: none; }
+    .panel { grid-column: 1; grid-row: 3; }
+    .panel-toggle { display: block; border: 1px solid var(--line); background: var(--raised); border-radius: var(--r); min-height: 40px; padding: 0 14px; cursor: pointer; }
+    .panel.collapsed .panel-body, .panel.collapsed .panel-foot { display: none; }
+    .cell, .item, .toggle, .seg button { min-height: 44px; }
+    .view-info { font-size: 12px; }
+    .lbl { font-size: 10.5px; padding: 1px 4px; } .lbl.big { font-size: 12px; }
+  }
+  @media (prefers-reduced-motion: reduce) { *, *::after { transition: none !important; scroll-behavior: auto !important; } }
+</style>
+</head>
+<body>
+<div class="app">
+  <div id="stage">
+    <div class="labels-layer" id="labels"></div>
+    <div class="view-info" aria-live="polite">
+      <div><span id="hudCam">Cinematic</span> · <span id="hudVersion">Siang</span></div>
+      <div class="sub" id="hudPhase">Titik 1, Awal Shift</div>
+    </div>
+    <div class="north" title="Arah utara">
+      <svg viewBox="0 0 44 44" aria-label="Arah utara"><g id="northArrow" transform="rotate(0 22 22)">
+        <text x="22" y="10" text-anchor="middle" font-family="system-ui, Segoe UI, sans-serif" font-weight="600" font-size="9" fill="#e3e5e8">U</text>
+        <path d="M22 12 L26.5 27 L22 24.5 L17.5 27 Z" fill="#e3e5e8"/><path d="M22 24.5 L26.5 27 L22 38 L17.5 27 Z" fill="none" stroke="#a0a6ad" stroke-width="1.1"/>
+      </g></svg>
+    </div>
+    <div class="credit">Model dozer: "Bulldozer" oleh semyon.kan (Sketchfab), CC BY 4.0</div>
+    <div class="loader" id="loader" role="status">
+      <div class="box">
+        <strong id="loadTitle">Memuat model 3D</strong>
+        <div class="bar"><i id="loadBar"></i></div>
+        <p id="loadMsg">Menyiapkan tampilan, total sekitar 18 MB.</p>
+        <button class="retry" id="retry" type="button" hidden>Muat ulang halaman</button>
+      </div>
+    </div>
+  </div>
+
+  <aside class="panel" id="sheet">
+    <div class="panel-head">
+      <div>
+        <h1>Rekonstruksi Dozer</h1>
+        <p>Stockpile CPP, rute titik 1 ke 3</p>
+      </div>
+      <button class="panel-toggle" id="sheetToggle" type="button" aria-expanded="true" aria-controls="sheetBody">Tutup</button>
+    </div>
+    <div class="panel-body" id="sheetBody">
+      <section class="sec">
+        <h2>Versi</h2>
+        <div class="seg">
+          <button type="button" id="btnDay" aria-pressed="true">Siang</button>
+          <button type="button" id="btnNight" aria-pressed="false">Malam, 20.20</button>
+        </div>
+      </section>
+
+      <section class="sec">
+        <h2>Titik rute</h2>
+        <div class="list" id="points"></div>
+      </section>
+
+      <section class="sec">
+        <h2>Kamera</h2>
+        <div class="grid2" id="cams"></div>
+        <div id="freeBox" hidden>
+          <label class="toggle" for="followDozer" style="margin-top:6px"><input type="checkbox" id="followDozer" checked><span>Ikuti dozer</span></label>
+          <p class="note">Seret untuk memutar 360°, scroll atau cubit untuk zoom, klik kanan atau dua jari untuk menggeser.</p>
+        </div>
+      </section>
+
+      <details class="sec" open>
+        <summary>Garis bantu</summary>
+        <div id="toggles"></div>
+      </details>
+
+      <details class="sec">
+        <summary>Tampilan</summary>
+        <label class="slider" for="exposure"><span>Kecerahan</span><input type="range" id="exposure" min="-2" max="2" step="0.1" value="0"><output id="exposureOut" for="exposure">0</output></label>
+        <label class="toggle" for="shadows"><input type="checkbox" id="shadows" checked><span>Bayangan</span><span class="hint">matikan jika berat</span></label>
+      </details>
+
+      <details class="sec">
+        <summary>Pintasan keyboard</summary>
+        <div class="keys">
+          <kbd>Spasi</kbd><span>putar / jeda</span>
+          <kbd>← →</kbd><span>mundur / maju 1 detik</span>
+          <kbd>1-9</kbd><span>ganti kamera</span>
+          <kbd>0</kbd><span>kamera bebas 360°</span>
+        </div>
+      </details>
+    </div>
+    <div class="panel-foot">OHS Divisi, PT Berau Coal · Internal, terbatas</div>
+  </aside>
+
+  <div class="timeline">
+    <button class="play" id="play" type="button" aria-label="Putar animasi"><svg viewBox="0 0 24 24" id="playIcon"><path d="M7 4l13 8-13 8z"/></svg></button>
+    <div class="speed" role="group" aria-label="Kecepatan putar">
+      <button type="button" data-speed="0.5" aria-pressed="false">0.5×</button>
+      <button type="button" data-speed="1" aria-pressed="true">1×</button>
+      <button type="button" data-speed="2" aria-pressed="false">2×</button>
+    </div>
+    <div class="track">
+      <div class="marks" id="marks"></div>
+      <div class="scale" id="scale"><input type="range" id="scrub" min="1" max="795" step="1" value="1" aria-label="Posisi animasi (frame)"></div>
+    </div>
+    <div class="clock"><b id="clockTime">00:00</b> / <span id="clockTotal">00:33</span><br>frame <span id="clockFrame">1</span></div>
+  </div>
+</div>
+
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+} }
+</script>
+<script type="module">
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { MeshoptDecoder } from "three/addons/libs/meshopt_decoder.module.js";
+import { CSS2DRenderer, CSS2DObject } from "three/addons/renderers/CSS2DRenderer.js";
+import { Line2 } from "three/addons/lines/Line2.js";
+import { LineMaterial } from "three/addons/lines/LineMaterial.js";
+import { LineGeometry } from "three/addons/lines/LineGeometry.js";
+
+const ASSETS = "assets/";
+const NIGHT_EV = 5.6;                       // same exposure boost as the Blender night scene
+const LIGHT_SCALE = 1 / (4 * Math.PI);      // Blender watts -> three.js radiant intensity
+const POINTS = [
+  { n: 1, frame: 1, name: "Awal Shift" },
+  { n: 2, frame: 521, name: "Kerja" },
+  { n: 3, frame: 723, name: "Kejadian 20.20" },
+];
+const CAMERAS = [
+  ["Cam_Cinematic", "Cinematic", "1"], ["Cam_POV", "POV Operator", "2"], ["Cam_Atas", "Atas", "3"],
+  ["Cam_AtasKanan", "Atas Kanan", "4"], ["Cam_Kanan", "Kanan", "5"], ["Cam_Kiri", "Kiri", "6"],
+  ["Cam_Depan", "Depan", "7"], ["Cam_Belakang", "Belakang", "8"], ["Cam_Overview", "Overview", "9"],
+  ["Cam_TKK", "TKK (lubang)", ""], ["free", "Bebas 360°", "0"],
+];
+const TOGGLES = [
+  { id: "sorot", label: "Garis sorot lampu", color: "var(--sorot)", night: true },
+  { id: "jarak", label: "Garis jarak", color: "var(--jarak)", night: true, dash: true },
+  { id: "ring", label: "Ring buffer 9 / 12 lux", color: "var(--ring)", night: true },
+  { id: "tulisan", label: "Tulisan peta lampu", color: "var(--text)", night: true },
+  { id: "beam", label: "Berkas cahaya", color: "#cdbb86", night: true },
+  { id: "titik", label: "Jalur dan titik", color: "#e0b040", night: false },
+];
+
+const $ = (id) => document.getElementById(id);
+const stage = $("stage");
+const state = { frame: 1, playing: false, speed: 1, night: false, cam: "Cam_Cinematic", show: {}, exposure: 0 };
+TOGGLES.forEach((t) => (state.show[t.id] = true));
+
+/* ---------- renderer / scene ---------- */
+const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.75));
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.AgXToneMapping;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+stage.prepend(renderer.domElement);
+const labelRenderer = new CSS2DRenderer({ element: $("labels") });
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 6000);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.enabled = false;
+controls.maxPolarAngle = Math.PI * 0.495;
+
+const dayGroup = new THREE.Group(), nightGroup = new THREE.Group();
+scene.add(dayGroup, nightGroup);
+const hemi = new THREE.HemisphereLight(0xb5cdf0, 0x5b5146, 1.1);
+const sun = new THREE.DirectionalLight(0xfff0d6, 3.0);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+Object.assign(sun.shadow.camera, { left: -45, right: 45, top: 45, bottom: -45, near: 1, far: 900 });
+sun.shadow.bias = -0.0005;
+dayGroup.add(hemi, sun, sun.target);
+const nightHemi = new THREE.HemisphereLight(0x23324f, 0x0b0a08, 0.006);
+nightGroup.add(nightHemi);
+
+/* ---------- loading ---------- */
+const manager = new THREE.LoadingManager();
+manager.onProgress = (url, loaded, total) => {
+  $("loadBar").style.width = `${Math.round((loaded / total) * 100)}%`;
+  $("loadMsg").textContent = `Mengunduh ${url.split("/").pop()} (${loaded} dari ${total} bagian)`;
+};
+const loader = new GLTFLoader(manager).setMeshoptDecoder(MeshoptDecoder);
+const loadGLB = (f) => loader.loadAsync(ASSETS + f);
+
+let failed = false;
+function fail(err) {
+  console.error(err);
+  if (failed) return;
+  failed = true;
+  $("loader").hidden = false;
+  $("loader").classList.add("error");
+  $("loadTitle").textContent = "Model 3D gagal dimuat";
+  $("loadMsg").textContent = `Penyebab: ${err?.message || err}. Periksa koneksi internet lalu muat ulang. Jika tetap gagal, folder assets di server belum lengkap.`;
+  $("retry").hidden = false;
+}
+$("retry").addEventListener("click", () => location.reload());
+window.addEventListener("error", (e) => fail(e.error || e.message));
+window.addEventListener("unhandledrejection", (e) => fail(e.reason));
+
+const sanitize = (n) => n.replace(/\s/g, "_").replace(/[\[\]\.:\/]/g, "");
+const C = new THREE.Matrix4().set(1, 0, 0, 0, 0, 0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1);   // blender -> three
+const C_INV = C.clone().invert();
+
+let DATA, dozerRoot, wheelNodes = [], treads = [], camMats = {}, nightLights = [], beams = [];
+const groups = { sorot: new THREE.Group(), jarak: new THREE.Group(), ring: new THREE.Group(), tulisan: new THREE.Group(), titik: new THREE.Group(), beam: new THREE.Group() };
+Object.values(groups).forEach((g) => scene.add(g));
+const lineMats = [];
+let trailLine, titikLabels = [];
+
+async function init() {
+  const [data, terrain, dozer, poles, treadUnits] = await Promise.all([
+    fetch(ASSETS + "data.json").then((r) => { if (!r.ok) throw new Error("data.json tidak ditemukan (HTTP " + r.status + ")"); return r.json(); }),
+    loadGLB("terrain.glb"), loadGLB("dozer.glb"), loadGLB("poles.glb"), loadGLB("tread_units.glb"),
+  ]);
+  DATA = data;
+  $("loadMsg").textContent = "Menyusun adegan.";
+
+  terrain.scene.traverse((o) => { if (o.isMesh) { o.receiveShadow = true; o.castShadow = true; } });
+  scene.add(terrain.scene);
+
+  dozerRoot = new THREE.Group();
+  dozerRoot.matrixAutoUpdate = false;
+  scene.add(dozerRoot);
+  dozer.scene.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+  dozerRoot.add(dozer.scene);
+  for (const w of DATA.wheels) {
+    const node = dozer.scene.getObjectByName(sanitize(w.name));
+    if (node) wheelNodes.push({ node, radius: w.radius, q0: node.quaternion.clone() });
+  }
+  buildTreads(treadUnits.scene);
+
+  poles.scene.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+  nightGroup.add(poles.scene);
+
+  for (const [name, cm] of Object.entries(DATA.cameras)) {
+    camMats[name] = { m: cm.m.map((a) => new THREE.Matrix4().fromArray(a)), lens: cm.lens };
+  }
+  buildNightLights();
+  buildAnnotations();
+
+  $("scrub").max = DATA.frame_end;
+  $("clockTotal").textContent = fmt((DATA.frame_end - 1) / DATA.fps);
+  buildPoints();
+  $("loader").hidden = true;
+  setVersion(false);
+  setCamera("Cam_Cinematic");
+  setFrame(1);
+  window.viewer = { setFrame, setCamera, setVersion, ready: true };
+}
+
+/* ---------- tracks: instanced shoes running around the loop ---------- */
+function buildTreads(unitsScene) {
+  for (const side of ["L", "R"]) {
+    const t = DATA.tracks[side];
+    const unit = unitsScene.getObjectByName("TreadUnit_" + side);
+    if (!unit || !t) continue;
+    const mesh = unit.isMesh ? unit : unit.getObjectByProperty("isMesh", true);
+    const pts = t.points_blender.map((p) => new THREE.Vector3(p[0], p[1], p[2]));
+    const cum = [0];
+    for (let i = 1; i <= pts.length; i++) cum.push(cum[i - 1] + pts[i % pts.length].distanceTo(pts[i - 1]));
+    // meshopt quantization stores a dequantize transform on the node; bake it into the shoe geometry
+    mesh.updateWorldMatrix(true, false);
+    const geo = mesh.geometry.clone().applyMatrix4(mesh.matrixWorld);
+    const inst = new THREE.InstancedMesh(geo, mesh.material, t.count);
+    inst.castShadow = true;
+    inst.frustumCulled = false;
+    dozerRoot.add(inst);
+    treads.push({ inst, pts, cum, L: cum[cum.length - 1], count: t.count, pitch: t.pitch });
+  }
+}
+
+const _P = new THREE.Vector3(), _T = new THREE.Vector3(), _M = new THREE.Matrix4(), _B = new THREE.Matrix4();
+function pointAt(tr, s) {
+  s = ((s % tr.L) + tr.L) % tr.L;
+  let lo = 0, hi = tr.cum.length - 1;
+  while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (tr.cum[mid] <= s) lo = mid; else hi = mid; }
+  const a = tr.pts[lo], b = tr.pts[(lo + 1) % tr.pts.length];
+  const u = (s - tr.cum[lo]) / Math.max(1e-6, tr.cum[lo + 1] - tr.cum[lo]);
+  _P.lerpVectors(a, b, u);
+  _T.subVectors(b, a).normalize();
+}
+function updateTreads(dist) {
+  for (const tr of treads) {
+    const off = -(((dist % tr.pitch) + tr.pitch) % tr.pitch);
+    const p = tr.L / tr.count;
+    for (let k = 0; k < tr.count; k++) {
+      pointAt(tr, k * p + off);
+      // blender rig space: a -> tangent, b -> outward normal (tz, 0, -tx), c -> -Y
+      _B.set(_T.x, _T.z, 0, _P.x,
+             _T.y, 0, -1, _P.y,
+             _T.z, -_T.x, 0, _P.z,
+             0, 0, 0, 1);
+      _M.multiplyMatrices(C, _B).multiply(C_INV);
+      tr.inst.setMatrixAt(k, _M);
+    }
+    tr.inst.instanceMatrix.needsUpdate = true;
+  }
+}
+
+/* ---------- night lighting ---------- */
+function buildNightLights() {
+  const tkk = new THREE.Vector3().fromArray(DATA.tkk);
+  for (const L of DATA.night_lights) {
+    const color = new THREE.Color(...L.color);
+    let light;
+    const intensity = L.energy * LIGHT_SCALE * (L.type === "SUN" ? 4 * Math.PI : 1);
+    if (L.type === "SPOT") {
+      light = new THREE.SpotLight(color, intensity, L.cutoff || 0, L.spot_size / 2, L.spot_blend, 2);
+    } else if (L.type === "POINT") {
+      light = new THREE.PointLight(color, intensity, L.cutoff || 0, 2);
+    } else if (L.type === "SUN") {
+      light = new THREE.DirectionalLight(color, intensity);
+    } else continue;
+    light.position.fromArray(L.pos);
+    const dir = new THREE.Vector3().fromArray(L.dir);
+    if (light.target) {
+      light.target.position.copy(light.position).addScaledVector(dir, 10);
+      if (L.type === "SUN") light.position.copy(tkk).addScaledVector(dir, -300), light.target.position.copy(tkk);
+    }
+    const mainSpot = L.type === "SPOT" && L.name.startsWith("Spot_");
+    if (mainSpot) {
+      light.castShadow = true;
+      light.shadow.mapSize.set(1536, 1536);
+      light.shadow.camera.near = 2;
+      light.shadow.camera.far = 160;
+      light.shadow.bias = -0.0004;
+      beams.push(makeBeam(light.position.clone(), dir, L.spot_size, color));
+    }
+    if (L.rig_local) { dozerRoot.add(light); if (light.target) dozerRoot.add(light.target); }
+    else { nightGroup.add(light); if (light.target) nightGroup.add(light.target); }
+    nightLights.push(light);
+  }
+}
+
+function makeBeam(apex, dir, angle, color) {
+  const len = 70, r = Math.tan(angle / 2) * len;
+  const geo = new THREE.ConeGeometry(r, len, 40, 1, true);
+  geo.translate(0, -len / 2, 0);
+  const mat = new THREE.ShaderMaterial({
+    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
+    uniforms: { uColor: { value: color }, uLen: { value: len } },
+    vertexShader: "varying float vD; varying vec3 vN; varying vec3 vV; void main(){ vD = -position.y; vec4 mv = modelViewMatrix*vec4(position,1.); vV = normalize(-mv.xyz); vN = normalize(normalMatrix*normal); gl_Position = projectionMatrix*mv; }",
+    fragmentShader: "uniform vec3 uColor; uniform float uLen; varying float vD; varying vec3 vN; varying vec3 vV; void main(){ float t = clamp(vD/uLen,0.,1.); float rim = pow(abs(dot(vN,vV)),2.0); float a = (1.-t)*(1.-t)*0.012*rim; gl_FragColor = vec4(uColor*a, a); }",
+  });
+  const cone = new THREE.Mesh(geo, mat);
+  cone.position.copy(apex);
+  cone.quaternion.setFromUnitVectors(new THREE.Vector3(0, -1, 0), dir.clone().normalize());
+  groups.beam.add(cone);
+  return cone;
+}
+
+/* ---------- annotations from the lighting map ---------- */
+function makeLine(points, color, width) {
+  const g = new LineGeometry();
+  g.setPositions(points.flat());
+  const m = new LineMaterial({ color: new THREE.Color(...color), linewidth: width, worldUnits: false, transparent: true, depthTest: true, toneMapped: false });
+  lineMats.push(m);
+  const line = new Line2(g, m);
+  line.computeLineDistances();
+  return line;
+}
+function makeLabel(text, colorArr, big = false) {
+  const el = document.createElement("div");
+  el.className = "lbl" + (big ? " big" : "");
+  el.textContent = text;
+  el.style.color = `rgb(${colorArr.map((c) => Math.round(Math.min(1, Math.pow(c, 1 / 2.2)) * 255)).join(",")})`;
+  return new CSS2DObject(el);
+}
+function buildAnnotations() {
+  const widths = { sorot: 2, jarak: 2.5, ring: 3 };
+  for (const L of DATA.lines) groups[L.kind]?.add(makeLine(L.points, L.color, widths[L.kind] || 2));
+  for (const lb of DATA.labels) {
+    const obj = makeLabel(lb.text, lb.color, lb.group === "titik" || lb.size >= 2.2);
+    obj.position.fromArray(lb.pos);
+    (lb.group === "titik" ? groups.titik : groups.tulisan).add(obj);
+    if (lb.group === "titik") titikLabels.push({ obj, from: lb.from_frame });
+  }
+  const wpMat = new THREE.MeshBasicMaterial({ color: 0xffe08a, toneMapped: false });
+  for (const wp of DATA.waypoints) {
+    const s = new THREE.Mesh(new THREE.SphereGeometry(wp.radius, 20, 14), wpMat);
+    s.position.fromArray(wp.pos);
+    groups.titik.add(s);
+    titikLabels.push({ obj: s, from: 740 });
+  }
+  trailLine = makeLine(DATA.trail, [1.0, 0.82, 0.25], 4);
+  groups.titik.add(trailLine);
+}
+
+/* ---------- frame update ---------- */
+const _cam = new THREE.Matrix4();
+function setFrame(f) {
+  if (!DATA) return;
+  f = Math.max(DATA.frame_start, Math.min(DATA.frame_end, f));
+  state.frame = f;
+  const i = Math.round(f) - DATA.frame_start;
+  dozerRoot.matrix.fromArray(DATA.rig[i]);
+  dozerRoot.matrixWorldNeedsUpdate = true;
+  const dist = DATA.dist[i];
+  for (const w of wheelNodes) {
+    w.node.quaternion.copy(w.q0).multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, -1), dist / w.radius));
+  }
+  updateTreads(dist);
+
+  const total = DATA.dist[DATA.dist.length - 1] || 1;
+  const segs = DATA.trail.length - 1;
+  trailLine.geometry.instanceCount = Math.max(0, Math.floor((dist / total) * segs));
+  for (const t of titikLabels) t.obj.visible = f >= t.from;
+
+  // keep the day sun's shadow box centred on the dozer
+  const pos = new THREE.Vector3().setFromMatrixPosition(dozerRoot.matrix);
+  if (DATA.sun) {
+    const d = new THREE.Vector3().fromArray(DATA.sun.dir);
+    sun.target.position.copy(pos);
+    sun.position.copy(pos).addScaledVector(d, -300);
+  }
+  if (state.cam !== "free") applyCamera(i);
+  else if ($("followDozer").checked) followTarget(pos);
+
+  $("scrub").value = Math.round(f);
+  $("clockFrame").textContent = Math.round(f);
+  $("clockTime").textContent = fmt((f - 1) / DATA.fps);
+  let phase = "Titik 1, Awal Shift";
+  if (f >= POINTS[2].frame) phase = "Titik 3, Kejadian 20.20";
+  else if (f >= 617) phase = "Menuju titik 3";
+  else if (f >= POINTS[1].frame) phase = "Titik 2, Kerja";
+  else if (f > 48) phase = "Menuju titik 2";
+  $("hudPhase").textContent = phase;
+}
+
+let lastFollow = null;
+function followTarget(pos) {
+  const p = pos.clone().add(new THREE.Vector3(0, 1.6, 0));
+  if (lastFollow) camera.position.add(p.clone().sub(lastFollow));
+  controls.target.copy(p);
+  lastFollow = p;
+}
+
+function applyCamera(i) {
+  const c = camMats[state.cam];
+  if (!c) return;
+  _cam.copy(c.m[Math.min(i, c.m.length - 1)]);
+  _cam.decompose(camera.position, camera.quaternion, camera.scale);
+  const lens = c.lens[Math.min(i, c.lens.length - 1)];
+  const hfov = 2 * Math.atan(18 / lens);
+  const vfov = camera.aspect >= 1 ? 2 * Math.atan(Math.tan(hfov / 2) / camera.aspect) : hfov;
+  camera.fov = THREE.MathUtils.radToDeg(vfov);
+  camera.updateProjectionMatrix();
+}
+
+/* north arrow: Blender +Y (survey north) is three.js -Z */
+const _fwd = new THREE.Vector3(), _up = new THREE.Vector3();
+function updateNorth() {
+  camera.getWorldDirection(_fwd);
+  _up.set(0, 1, 0).applyQuaternion(camera.quaternion);
+  const v = Math.abs(_fwd.y) > 0.9 ? _up : _fwd;
+  const heading = Math.atan2(v.x, -v.z);
+  $("northArrow").setAttribute("transform", `rotate(${(-heading * 180) / Math.PI} 22 22)`);
+}
+
+/* ---------- UI ---------- */
+function setCamera(name) {
+  state.cam = name;
+  const free = name === "free";
+  controls.enabled = free;
+  $("freeBox").hidden = !free;
+  for (const b of $("cams").children) b.setAttribute("aria-pressed", String(b.dataset.cam === name));
+  $("hudCam").textContent = CAMERAS.find((c) => c[0] === name)?.[1] ?? name;
+  if (free) {
+    camera.fov = 45;
+    camera.updateProjectionMatrix();
+    const pos = new THREE.Vector3().setFromMatrixPosition(dozerRoot.matrix).add(new THREE.Vector3(0, 1.6, 0));
+    lastFollow = pos.clone();
+    controls.target.copy(pos);
+    camera.position.copy(pos).add(new THREE.Vector3(18, 12, 18));
+    controls.update();
+  }
+  setFrame(state.frame);
+}
+
+function setVersion(night) {
+  state.night = night;
+  $("btnDay").setAttribute("aria-pressed", String(!night));
+  $("btnNight").setAttribute("aria-pressed", String(night));
+  $("hudVersion").textContent = night ? "Malam, 20.20" : "Siang";
+  dayGroup.visible = !night;
+  nightGroup.visible = night;
+  for (const l of nightLights) l.visible = night;
+  scene.background = new THREE.Color(night ? 0x05070c : 0x9fb8d6);
+  scene.fog = night ? new THREE.FogExp2(0x0a0f18, 0.0032) : new THREE.Fog(0x9fb8d6, 400, 1600);
+  applyExposure();
+  applyVisibility();
+  for (const t of TOGGLES) {
+    if (!t.night) continue;
+    const input = $("tg_" + t.id);
+    input.disabled = !night;
+    input.closest(".toggle").classList.toggle("is-off", !night);
+  }
+}
+function applyExposure() {
+  renderer.toneMappingExposure = Math.pow(2, (state.night ? NIGHT_EV : 0) + state.exposure);
+}
+function applyVisibility() {
+  for (const t of TOGGLES) groups[t.id].visible = state.show[t.id] && (!t.night || state.night);
+}
+
+function buildUI() {
+  const cams = $("cams");
+  for (const [id, label, key] of CAMERAS) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "cell" + (id === "free" ? " wide" : "");
+    b.dataset.cam = id;
+    b.setAttribute("aria-pressed", "false");
+    b.innerHTML = `<span>${label}</span>${key ? `<kbd>${key}</kbd>` : ""}`;
+    b.addEventListener("click", () => setCamera(id));
+    cams.append(b);
+  }
+  const tg = $("toggles");
+  for (const t of TOGGLES) {
+    const row = document.createElement("label");
+    row.className = "toggle";
+    row.htmlFor = "tg_" + t.id;
+    row.innerHTML = `<input type="checkbox" id="tg_${t.id}" checked><span class="sw${t.dash ? " dash" : ""}" style="color:${t.color}"></span><span>${t.label}</span>${t.night ? '<span class="hint">malam</span>' : ""}`;
+    row.querySelector("input").addEventListener("change", (e) => { state.show[t.id] = e.target.checked; applyVisibility(); });
+    tg.append(row);
+  }
+  $("followDozer").addEventListener("change", () => { lastFollow = null; });
+  $("btnDay").addEventListener("click", () => setVersion(false));
+  $("btnNight").addEventListener("click", () => setVersion(true));
+  $("play").addEventListener("click", togglePlay);
+  for (const b of document.querySelectorAll(".speed button")) {
+    b.addEventListener("click", () => {
+      state.speed = Number(b.dataset.speed);
+      for (const o of document.querySelectorAll(".speed button")) o.setAttribute("aria-pressed", String(o === b));
+    });
+  }
+  $("scrub").addEventListener("input", (e) => setFrame(Number(e.target.value)));
+  $("exposure").addEventListener("input", (e) => { state.exposure = Number(e.target.value); $("exposureOut").textContent = e.target.value; applyExposure(); });
+  $("shadows").addEventListener("change", (e) => { renderer.shadowMap.enabled = e.target.checked; scene.traverse((o) => { if (o.material) [].concat(o.material).forEach((m) => (m.needsUpdate = true)); }); });
+  $("sheetToggle").addEventListener("click", () => {
+    const collapsed = $("sheet").classList.toggle("collapsed");
+    $("sheetToggle").textContent = collapsed ? "Buka" : "Tutup";
+    $("sheetToggle").setAttribute("aria-expanded", String(!collapsed));
+  });
+  window.addEventListener("keydown", (e) => {
+    if (!DATA || e.altKey || e.ctrlKey || e.metaKey) return;
+    if (e.target.matches("input[type=range]") && (e.key === "ArrowLeft" || e.key === "ArrowRight")) return;
+    if (e.code === "Space" && !e.target.matches("button, summary")) { e.preventDefault(); togglePlay(); }
+    else if (e.key === "ArrowRight") setFrame(state.frame + DATA.fps);
+    else if (e.key === "ArrowLeft") setFrame(state.frame - DATA.fps);
+    else if (e.key === "0") setCamera("free");
+    else { const c = CAMERAS.find((x) => x[2] && x[2] === e.key); if (c) setCamera(c[0]); }
+  });
+}
+function buildPoints() {
+  const marks = $("marks"), list = $("points");
+  for (const p of POINTS) {
+    const jump = () => { if (state.playing) togglePlay(); setFrame(p.frame); };
+    const m = document.createElement("button");
+    m.type = "button";
+    m.style.left = `${((p.frame - 1) / (DATA.frame_end - 1)) * 100}%`;
+    m.innerHTML = `<span class="num">${p.n}</span>`;
+    m.setAttribute("aria-label", `Lompat ke titik ${p.n}, ${p.name}`);
+    m.addEventListener("click", jump);
+    marks.append(m);
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "item";
+    b.innerHTML = `<span class="num">${p.n}</span><span>${p.name}</span><span class="meta">${fmt((p.frame - 1) / DATA.fps)}</span>`;
+    b.addEventListener("click", jump);
+    list.append(b);
+  }
+}
+function togglePlay() {
+  state.playing = !state.playing;
+  if (state.playing && state.frame >= DATA.frame_end) setFrame(1);
+  $("play").setAttribute("aria-label", state.playing ? "Jeda animasi" : "Putar animasi");
+  $("playIcon").innerHTML = state.playing ? '<path d="M6 4h4v16H6zM14 4h4v16h-4z"/>' : '<path d="M7 4l13 8-13 8z"/>';
+}
+const fmt = (s) => `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+
+function resize() {
+  const w = stage.clientWidth, h = stage.clientHeight;
+  if (!w || !h) return;
+  renderer.setSize(w, h, false);
+  labelRenderer.setSize(w, h);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+  for (const m of lineMats) m.resolution.set(w, h);
+  if (DATA) setFrame(state.frame);
+}
+new ResizeObserver(resize).observe(stage);
+
+let last = performance.now();
+function tick(now) {
+  const dt = Math.min(0.1, (now - last) / 1000);
+  last = now;
+  if (DATA && state.playing) {
+    const next = state.frame + dt * DATA.fps * state.speed;
+    if (next >= DATA.frame_end) { setFrame(DATA.frame_end); togglePlay(); }
+    else setFrame(next);
+  }
+  if (state.cam === "free") controls.update();
+  renderer.render(scene, camera);
+  labelRenderer.render(scene, camera);
+  updateNorth();
+  requestAnimationFrame(tick);
+}
+
+buildUI();
+resize();
+requestAnimationFrame(tick);
+init().catch(fail);
+</script>
+</body>
+</html>
