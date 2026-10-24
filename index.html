@@ -142,6 +142,7 @@
   /* annotation tags inside the 3D view */
   .lbl { font: 600 12.5px/1.15 var(--font); white-space: nowrap; padding: 2px 6px; border-radius: 4px; background: rgba(10, 12, 14, .78); transform: translateY(-50%); }
   .lbl.big { font-size: 14px; }
+  .poi { font: 600 12.5px/1.2 var(--font); color: #fff; white-space: nowrap; padding: 4px 8px; border-radius: 6px; background: rgba(16, 19, 22, .88); border: 1px solid rgba(255, 255, 255, .18); transform: translateY(-50%); }
 
   @media (max-width: 760px) {
     body { overflow: auto; }
@@ -163,7 +164,7 @@
   <div id="stage">
     <div class="labels-layer" id="labels"></div>
     <div class="view-info" aria-live="polite">
-      <div><span id="hudCam">Cinematic</span> · <span id="hudVersion">Siang</span></div>
+      <div><span id="hudCam">360°</span> · <span id="hudVersion">Malam, 20.20</span></div>
       <div class="sub" id="hudPhase">Titik 1, Awal Shift</div>
     </div>
     <div class="north" title="Arah utara">
@@ -172,12 +173,11 @@
         <path d="M22 12 L26.5 27 L22 24.5 L17.5 27 Z" fill="#e3e5e8"/><path d="M22 24.5 L26.5 27 L22 38 L17.5 27 Z" fill="none" stroke="#a0a6ad" stroke-width="1.1"/>
       </g></svg>
     </div>
-    <div class="credit">Model dozer: "Bulldozer" oleh semyon.kan (Sketchfab), CC BY 4.0</div>
     <div class="loader" id="loader" role="status">
       <div class="box">
         <strong id="loadTitle">Memuat model 3D</strong>
         <div class="bar"><i id="loadBar"></i></div>
-        <p id="loadMsg">Menyiapkan tampilan, total sekitar 18 MB.</p>
+        <p id="loadMsg">Menyiapkan tampilan, total sekitar 21 MB.</p>
         <button class="retry" id="retry" type="button" hidden>Muat ulang halaman</button>
       </div>
     </div>
@@ -195,8 +195,16 @@
       <section class="sec">
         <h2>Versi</h2>
         <div class="seg">
-          <button type="button" id="btnDay" aria-pressed="true">Siang</button>
-          <button type="button" id="btnNight" aria-pressed="false">Malam, 20.20</button>
+          <button type="button" id="btnDay" aria-pressed="false">Siang</button>
+          <button type="button" id="btnNight" aria-pressed="true">Malam, 20.20</button>
+        </div>
+      </section>
+
+      <section class="sec">
+        <h2>Tampilan</h2>
+        <div class="seg">
+          <button type="button" id="btnReal" aria-pressed="false">Realistis</button>
+          <button type="button" id="btnAsli" aria-pressed="true">Asli</button>
         </div>
       </section>
 
@@ -220,7 +228,7 @@
       </details>
 
       <details class="sec">
-        <summary>Tampilan</summary>
+        <summary>Pengaturan gambar</summary>
         <label class="slider" for="exposure"><span>Kecerahan</span><input type="range" id="exposure" min="-2" max="2" step="0.1" value="0"><output id="exposureOut" for="exposure">0</output></label>
         <label class="toggle" for="shadows"><input type="checkbox" id="shadows" checked><span>Bayangan</span><span class="hint">matikan jika berat</span></label>
       </details>
@@ -231,7 +239,7 @@
           <kbd>Spasi</kbd><span>putar / jeda</span>
           <kbd>← →</kbd><span>mundur / maju 1 detik</span>
           <kbd>1-9</kbd><span>ganti kamera</span>
-          <kbd>0</kbd><span>kamera bebas 360°</span>
+          <kbd>0</kbd><span>kamera 360°</span>
         </div>
       </details>
     </div>
@@ -273,15 +281,15 @@ const ASSETS = "assets/";
 const NIGHT_EV = 5.6;                       // same exposure boost as the Blender night scene
 const LIGHT_SCALE = 1 / (4 * Math.PI);      // Blender watts -> three.js radiant intensity
 const POINTS = [
-  { n: 1, frame: 1, name: "Awal Shift" },
-  { n: 2, frame: 521, name: "Kerja" },
-  { n: 3, frame: 723, name: "Kejadian 20.20" },
+  { n: 1, frame: 1, name: "Dozing di Stockpile 1", time: "19.15 WITA" },
+  { n: 2, frame: 521, name: "Berpindah ke Stockpile 2", time: "19.30 WITA" },
+  { n: 3, frame: 723, name: "Kejadian", time: "20.20 WITA" },
 ];
 const CAMERAS = [
   ["Cam_Cinematic", "Cinematic", "1"], ["Cam_POV", "POV Operator", "2"], ["Cam_Atas", "Atas", "3"],
   ["Cam_AtasKanan", "Atas Kanan", "4"], ["Cam_Kanan", "Kanan", "5"], ["Cam_Kiri", "Kiri", "6"],
   ["Cam_Depan", "Depan", "7"], ["Cam_Belakang", "Belakang", "8"], ["Cam_Overview", "Overview", "9"],
-  ["Cam_TKK", "TKK (lubang)", ""], ["free", "Bebas 360°", "0"],
+  ["Cam_TKK", "TKK (lubang)", ""], ["free", "360°", "0"],
 ];
 const TOGGLES = [
   { id: "sorot", label: "Garis sorot lampu", color: "var(--sorot)", night: true },
@@ -290,11 +298,12 @@ const TOGGLES = [
   { id: "tulisan", label: "Tulisan peta lampu", color: "var(--text)", night: true },
   { id: "beam", label: "Berkas cahaya", color: "#cdbb86", night: true },
   { id: "titik", label: "Jalur dan titik", color: "#e0b040", night: false },
+  { id: "poi", label: "Penanda lokasi", color: "#f0c040", night: false },
 ];
 
 const $ = (id) => document.getElementById(id);
 const stage = $("stage");
-const state = { frame: 1, playing: false, speed: 1, night: false, cam: "Cam_Cinematic", show: {}, exposure: 0 };
+const state = { frame: 1, playing: false, speed: 1, night: true, real: false, cam: "free", show: {}, exposure: 0 };
 TOGGLES.forEach((t) => (state.show[t.id] = true));
 
 /* ---------- renderer / scene ---------- */
@@ -355,21 +364,31 @@ const C = new THREE.Matrix4().set(1, 0, 0, 0, 0, 0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 
 const C_INV = C.clone().invert();
 
 let DATA, dozerRoot, wheelNodes = [], treads = [], camMats = {}, nightLights = [], beams = [];
-const groups = { sorot: new THREE.Group(), jarak: new THREE.Group(), ring: new THREE.Group(), tulisan: new THREE.Group(), titik: new THREE.Group(), beam: new THREE.Group() };
+const groups = { sorot: new THREE.Group(), jarak: new THREE.Group(), ring: new THREE.Group(), tulisan: new THREE.Group(), titik: new THREE.Group(), beam: new THREE.Group(), poi: new THREE.Group() };
+const realGroup = new THREE.Group();     // trees: realistic look only
+scene.add(realGroup);
+let skirtMesh = null;
+const terrainUniforms = { uReal: { value: 1 } };
 Object.values(groups).forEach((g) => scene.add(g));
 const lineMats = [];
 let trailLine, titikLabels = [];
 
 async function init() {
-  const [data, terrain, dozer, poles, treadUnits] = await Promise.all([
+  const [data, terrain, dozer, poles, treadUnits, trees] = await Promise.all([
     fetch(ASSETS + "data.json").then((r) => { if (!r.ok) throw new Error("data.json tidak ditemukan (HTTP " + r.status + ")"); return r.json(); }),
-    loadGLB("terrain.glb"), loadGLB("dozer.glb"), loadGLB("poles.glb"), loadGLB("tread_units.glb"),
+    loadGLB("terrain.glb"), loadGLB("dozer.glb"), loadGLB("poles.glb"), loadGLB("tread_units.glb"), loadGLB("trees.glb"),
   ]);
   DATA = data;
   $("loadMsg").textContent = "Menyusun adegan.";
 
-  terrain.scene.traverse((o) => { if (o.isMesh) { o.receiveShadow = true; o.castShadow = true; } });
+  terrain.scene.traverse((o) => {
+    if (!o.isMesh) return;
+    o.receiveShadow = true; o.castShadow = true;
+    if (o.name.includes("Skirt") || o.parent?.name.includes("Skirt")) skirtMesh = o;
+    else patchTerrain(o.material);
+  });
   scene.add(terrain.scene);
+  buildTrees(trees.scene);
 
   dozerRoot = new THREE.Group();
   dozerRoot.matrixAutoUpdate = false;
@@ -395,10 +414,61 @@ async function init() {
   $("clockTotal").textContent = fmt((DATA.frame_end - 1) / DATA.fps);
   buildPoints();
   $("loader").hidden = true;
-  setVersion(false);
-  setCamera("Cam_Cinematic");
+  setVersion(true);
+  setCamera("free");
   setFrame(1);
-  window.viewer = { setFrame, setCamera, setVersion, ready: true };
+  window.viewer = { setFrame, setCamera, setVersion, setReal: (r) => { state.real = r; applyLook(); }, ready: true };
+}
+
+/* ---------- realistic terrain: same colour logic as the Blender material ----------
+   exposure (bright -0.08, contrast 0.28), saturation 0.95 / value 0.8, and near-black coal where the
+   photo is low-saturation and not green (excess-green mask). uReal = 0 shows the untouched drone photo. */
+function patchTerrain(mat) {
+  mat.onBeforeCompile = (shader) => {
+    shader.uniforms.uReal = terrainUniforms.uReal;
+    shader.fragmentShader = shader.fragmentShader
+      .replace("#include <common>", "#include <common>\nuniform float uReal;\nfloat coalMask = 0.0;")
+      .replace("#include <map_fragment>", `#include <map_fragment>
+        {
+          vec3 c = diffuseColor.rgb;
+          vec3 bc = max(1.28 * c - 0.22, 0.0);
+          float l = dot(bc, vec3(0.2126, 0.7152, 0.0722));
+          vec3 col = mix(vec3(l), bc, 0.95) * 0.8;
+          float mx = max(c.r, max(c.g, c.b)), mn = min(c.r, min(c.g, c.b));
+          float sat = mx > 0.0 ? (mx - mn) / mx : 0.0;
+          float veg = clamp((2.0 * c.g - c.r - c.b - 0.03) / 0.07, 0.0, 1.0);
+          float lowsat = clamp((sat - 0.48) / (0.32 - 0.48), 0.0, 1.0);
+          coalMask = clamp(lowsat * (1.0 - veg), 0.0, 1.0) * uReal;
+          vec3 coal = vec3(l) * vec3(0.075, 0.072, 0.07);
+          diffuseColor.rgb = mix(c, mix(col, coal, coalMask), uReal);
+        }`)
+      .replace("#include <roughnessmap_fragment>", "#include <roughnessmap_fragment>\nroughnessFactor = mix(roughnessFactor, mix(0.88, 0.74, coalMask), uReal);");
+  };
+  mat.needsUpdate = true;
+}
+
+/* ---------- trees: one InstancedMesh per tree part ---------- */
+function buildTrees(treeScene) {
+  treeScene.updateMatrixWorld(true);
+  const inst = DATA.tree_instances || {};
+  const tmp = new THREE.Matrix4();
+  for (const [name, mats] of Object.entries(inst)) {
+    const root = treeScene.getObjectByName(name);
+    if (!root) continue;
+    const placements = mats.map((a) => new THREE.Matrix4().fromArray(a));
+    root.traverse((o) => {
+      if (!o.isMesh) return;
+      const m = o.material;
+      if (m.map && (m.alphaTest > 0 || m.transparent || m.name.includes("leaves"))) {
+        m.alphaTest = 0.5; m.transparent = false; m.side = THREE.DoubleSide;
+      }
+      const im = new THREE.InstancedMesh(o.geometry, m, placements.length);
+      placements.forEach((p, k) => im.setMatrixAt(k, tmp.multiplyMatrices(p, o.matrixWorld)));
+      im.castShadow = true; im.receiveShadow = true;
+      im.frustumCulled = false;
+      realGroup.add(im);
+    });
+  }
 }
 
 /* ---------- tracks: instanced shoes running around the loop ---------- */
@@ -537,6 +607,17 @@ function buildAnnotations() {
   }
   trailLine = makeLine(DATA.trail, [1.0, 0.82, 0.25], 4);
   groups.titik.add(trailLine);
+  // place-name markers: thin pin from the ground to a name plate
+  for (const p of DATA.pois || []) {
+    groups.poi.add(makeLine([p.base, p.top], [0.95, 0.75, 0.2], 2));
+    const el = document.createElement("div");
+    el.className = "poi";
+    el.textContent = p.label;
+    const tag = new CSS2DObject(el);
+    tag.position.fromArray(p.top);
+    tag.center.set(0.5, 1.15);
+    groups.poi.add(tag);
+  }
 }
 
 /* ---------- frame update ---------- */
@@ -572,10 +653,10 @@ function setFrame(f) {
   $("scrub").value = Math.round(f);
   $("clockFrame").textContent = Math.round(f);
   $("clockTime").textContent = fmt((f - 1) / DATA.fps);
-  let phase = "Titik 1, Awal Shift";
-  if (f >= POINTS[2].frame) phase = "Titik 3, Kejadian 20.20";
+  let phase = "1. Dozing di Stockpile 1, 19.15 WITA";
+  if (f >= POINTS[2].frame) phase = "3. Kejadian, 20.20 WITA";
   else if (f >= 617) phase = "Menuju titik 3";
-  else if (f >= POINTS[1].frame) phase = "Titik 2, Kerja";
+  else if (f >= POINTS[1].frame) phase = "2. Berpindah ke Stockpile 2, 19.30 WITA";
   else if (f > 48) phase = "Menuju titik 2";
   $("hudPhase").textContent = phase;
 }
@@ -638,9 +719,7 @@ function setVersion(night) {
   dayGroup.visible = !night;
   nightGroup.visible = night;
   for (const l of nightLights) l.visible = night;
-  scene.background = new THREE.Color(night ? 0x05070c : 0x9fb8d6);
-  scene.fog = night ? new THREE.FogExp2(0x0a0f18, 0.0032) : new THREE.Fog(0x9fb8d6, 400, 1600);
-  applyExposure();
+  applyLook();
   applyVisibility();
   for (const t of TOGGLES) {
     if (!t.night) continue;
@@ -648,6 +727,21 @@ function setVersion(night) {
     input.disabled = !night;
     input.closest(".toggle").classList.toggle("is-off", !night);
   }
+}
+/* realistic: dark coal, trees, overcast haze, no broken scan edges. asli: the untouched drone model */
+function applyLook() {
+  const r = state.real, night = state.night;
+  terrainUniforms.uReal.value = r ? 1 : 0;
+  realGroup.visible = r;
+  if (skirtMesh) skirtMesh.visible = !r;
+  $("btnReal").setAttribute("aria-pressed", String(r));
+  $("btnAsli").setAttribute("aria-pressed", String(!r));
+  const sky = night ? 0x05070c : r ? 0xa9aeb3 : 0x9fb8d6;
+  scene.background = new THREE.Color(sky);
+  scene.fog = night ? new THREE.FogExp2(0x0a0f18, 0.0032) : r ? new THREE.FogExp2(0xa9aeb3, 0.0021) : new THREE.Fog(0x9fb8d6, 400, 1600);
+  sun.intensity = r ? 2.2 : 3.0;
+  hemi.intensity = r ? 1.5 : 1.1;
+  applyExposure();
 }
 function applyExposure() {
   renderer.toneMappingExposure = Math.pow(2, (state.night ? NIGHT_EV : 0) + state.exposure);
@@ -680,6 +774,8 @@ function buildUI() {
   $("followDozer").addEventListener("change", () => { lastFollow = null; });
   $("btnDay").addEventListener("click", () => setVersion(false));
   $("btnNight").addEventListener("click", () => setVersion(true));
+  $("btnReal").addEventListener("click", () => { state.real = true; applyLook(); });
+  $("btnAsli").addEventListener("click", () => { state.real = false; applyLook(); });
   $("play").addEventListener("click", togglePlay);
   for (const b of document.querySelectorAll(".speed button")) {
     b.addEventListener("click", () => {
@@ -719,7 +815,7 @@ function buildPoints() {
     const b = document.createElement("button");
     b.type = "button";
     b.className = "item";
-    b.innerHTML = `<span class="num">${p.n}</span><span>${p.name}</span><span class="meta">${fmt((p.frame - 1) / DATA.fps)}</span>`;
+    b.innerHTML = `<span class="num">${p.n}</span><span>${p.name}</span><span class="meta">${p.time}</span>`;
     b.addEventListener("click", jump);
     list.append(b);
   }
