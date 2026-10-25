@@ -414,11 +414,11 @@ const LIGHT_SCALE = 1 / (4 * Math.PI);      // Blender watts -> three.js radiant
 const POINTS = [
   { n: 1, frame: 1, name: "Dozing di Stockpile 1", time: "19.15 WITA" },
   { n: 2, frame: 521, name: "Diarahkan pengawas ke Stockpile 2 untuk memotong kucuran", time: "19.30 WITA" },
-  { n: 3, frame: 716, name: "Memotong kucuran di area Stockpile 2", time: "20.00 WITA" },
-  { n: 4, frame: 1088, name: "Terperosok ke lubang hopper, memanggil Pengawas RIC via radio", time: "20.10 WITA" },
+  { n: 3, frame: 701, name: "Memotong kucuran di area Stockpile 2", time: "20.00 WITA" },
+  { n: 4, frame: 1120, name: "Terperosok ke lubang hopper, memanggil Pengawas RIC via radio", time: "20.10 WITA" },
 ];
 const CAMERAS = [
-  ["Cam_Cinematic", "Cinematic", "1"], ["Cam_POV", "POV Operator", "2"], ["Cam_Atas", "Atas", "3"],
+  ["Cam_Cinematic", "Cinematic", "1"], ["Cam_Drone", "Drone", "d"], ["Cam_POV", "POV Operator", "2"], ["Cam_Atas", "Atas", "3"],
   ["Cam_AtasKanan", "Atas Kanan", "4"], ["Cam_Kanan", "Kanan", "5"], ["Cam_Kiri", "Kiri", "6"],
   ["Cam_Depan", "Depan", "7"], ["Cam_Belakang", "Belakang", "8"], ["Cam_Overview", "Overview", "9"],
   ["Cam_TKK", "TKK (lubang)", ""], ["free", "360°", "0"],
@@ -607,44 +607,122 @@ function buildTrees(treeScene) {
 
 /* ---------- coal at the conveyor tip: load on the blade + heap left behind when reversing ---------- */
 let coalPile = null, coalHeap = null, terrainRoot = null;
-function coalMesh(seed) {
-  const geo = new THREE.IcosahedronGeometry(1, 4);
-  const p = geo.attributes.position, v = new THREE.Vector3();
-  const lump = (x, y, z) => Math.sin(x * 4.1 + y * 2.3 + seed) * Math.cos(z * 3.7 - x * 1.9) + 0.5 * Math.sin(y * 9.0 + z * 6.5 + seed);
-  for (let k = 0; k < p.count; k++) {
-    v.fromBufferAttribute(p, k);
-    v.multiplyScalar(1 + 0.09 * lump(v.x, v.y, v.z));
-    if (v.y < 0) v.y *= 0.6;               // keep a buried lower half so the pile sits into sloping ground
-    p.setXYZ(k, v.x, v.y, v.z);
+/* stockpile shape, same as the Blender piles: straight flanks at the angle of repose, rounded crest,
+   uneven footprint, slide streaks, fine lumps and loose lumps rolled down to the toe.
+   shape: [peak height, flat-crest radius, loose lumps]; unit footprint radius 1, buried skirt past r = 1 */
+const COAL_SHAPES = { cone: [0.95, 0.04, 160], windrow: [0.8, 0.32, 120], load: [0.85, 0.22, 0] };
+function hash3(x, y, z) { const h = Math.sin(x * 127.1 + y * 311.7 + z * 74.7) * 43758.5453; return h - Math.floor(h); }
+function vnoise(x, y, z) {
+  const xi = Math.floor(x), yi = Math.floor(y), zi = Math.floor(z);
+  const s = (t) => t * t * (3 - 2 * t), u = s(x - xi), v = s(y - yi), w = s(z - zi);
+  const l = (a, b, t) => a + (b - a) * t, h = (i, j, k) => hash3(xi + i, yi + j, zi + k);
+  return 2 * l(l(l(h(0, 0, 0), h(1, 0, 0), u), l(h(0, 1, 0), h(1, 1, 0), u), v),
+               l(l(h(0, 0, 1), h(1, 0, 1), u), l(h(0, 1, 1), h(1, 1, 1), u), v), w) - 1;
+}
+function fbm(x, y, z) { let a = 0, f = 1, g = 1; for (let o = 0; o < 4; o++) { a += g * vnoise(x * f, y * f, z * f); f *= 2; g *= 0.5; } return a; }
+function cellF1(x, y) {
+  const xi = Math.floor(x), yi = Math.floor(y); let d = 9;
+  for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) {
+    const px = xi + i + hash3(xi + i, yi + j, 1), py = yi + j + hash3(xi + i, yi + j, 2);
+    d = Math.min(d, Math.hypot(px - x, py - y));
   }
+  return d;
+}
+function pileHeight(r, peak, crest) {
+  if (r > 1) return -0.25 * (r - 1) / 0.1;
+  const x = (1 - r) / (1 - crest), k = 0.05;
+  const sm = -k * Math.log(Math.exp(-x / k) + Math.exp(-1 / k));
+  return peak * sm * (1 - 0.15 * Math.pow(1 - x, 6));
+}
+function coalMesh(seed, shape = "windrow") {
+  const [peak, crest, nRocks] = COAL_SHAPES[shape], RINGS = 30, SEGS = 80;
+  const ox = seed * 3.1, oy = seed * 1.7;
+  const pos = [0, pileHeight(0, peak, crest), 0], idx = [];
+  for (let i = 1; i <= RINGS; i++) {
+    const r = 1.1 * i / RINGS;
+    for (let j = 0; j < SEGS; j++) {
+      const a = 2 * Math.PI * j / SEGS, ca = Math.cos(a), sa = Math.sin(a);
+      const wob = 1 + 0.10 * vnoise(ca * 1.3 + ox, sa * 1.3 + oy, seed) + 0.05 * vnoise(ca * 3.1 + ox, sa * 3.1 + oy, seed + 0.5);
+      const x = ca * r * wob, y = sa * r * wob;
+      let z = pileHeight(r, peak, crest);
+      if (r <= 1) {
+        const fade = Math.min(1, 4 * (1.02 - r));
+        z += 0.035 * fbm(x * 2 + ox, y * 2 + oy, seed) * (0.4 + 0.6 * (1 - r));
+        z += 0.035 * vnoise(a * 9 / Math.PI + ox, r * 1.2, seed) * Math.sin(Math.PI * r) * fade;
+        z += 0.012 * (0.45 - cellF1(x * 16 + ox, y * 16 + oy)) * fade;
+      }
+      pos.push(x, z, -y);
+    }
+  }
+  const at = (i, j) => 1 + (i * SEGS) + (j % SEGS);
+  for (let j = 0; j < SEGS; j++) idx.push(0, at(0, j), at(0, j + 1));
+  for (let i = 0; i < RINGS - 1; i++) for (let j = 0; j < SEGS; j++) {
+    idx.push(at(i, j), at(i + 1, j), at(i, j + 1), at(i, j + 1), at(i + 1, j), at(i + 1, j + 1));
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+  const col = [];                            // black coal with faint grey dusty patches
+  for (let k = 0; k < pos.length; k += 3) {
+    const c = 0.012 + 0.016 * (0.5 + 0.5 * vnoise(pos[k] * 3 + ox, pos[k + 2] * 3 + oy, seed + 7));
+    col.push(c, c * 0.97, c * 0.93);
+  }
+  geo.setAttribute("color", new THREE.Float32BufferAttribute(col, 3));
+  geo.setIndex(idx);
   geo.computeVertexNormals();
-  const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: 0x0b0b0a, roughness: 0.6, flatShading: true }));
+  const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.55, metalness: 0.08, flatShading: true });
+  const mesh = new THREE.Mesh(geo, mat);
   mesh.castShadow = true; mesh.receiveShadow = true;
-  return mesh;
+  const group = new THREE.Group(); group.add(mesh);
+  if (nRocks) {                              // loose lumps rolled down to the toe
+    const rocks = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 0),
+      new THREE.MeshStandardMaterial({ color: 0x111110, roughness: 0.38, metalness: 0.2, flatShading: true }), nRocks);
+    const m = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler(), s = new THREE.Vector3(), p = new THREE.Vector3();
+    for (let k = 0; k < nRocks; k++) {
+      const rnd = (n) => hash3(k, seed, n);
+      const a = rnd(1) * Math.PI * 2, r = 0.75 + 0.5 * Math.pow(rnd(2), 1.5), sz = 0.018 + 0.05 * rnd(3) * rnd(3);
+      const h = r < 1 ? Math.max(0, pileHeight(r, peak, crest)) : 0;
+      p.set(Math.cos(a) * r, h + sz * 0.25, -Math.sin(a) * r);
+      q.setFromEuler(e.set(rnd(4) * 6.3, rnd(5) * 6.3, rnd(6) * 6.3));
+      s.set(sz * (0.8 + 0.5 * rnd(7)), sz * 0.65, sz * (0.8 + 0.5 * rnd(8)));
+      rocks.setMatrixAt(k, m.compose(p, q, s));
+    }
+    rocks.castShadow = true; rocks.receiveShadow = true;
+    group.add(rocks);
+  }
+  return group;
 }
 function buildCoal() {
   if (DATA.coal_pile) {
-    const m = coalMesh(1.3), f = DATA.coal_pile.full, pos = DATA.coal_pile.pos;   // blender rig space -> three
+    const m = coalMesh(1.3, "load"), f = DATA.coal_pile.full, pos = DATA.coal_pile.pos;   // blender rig space -> three
     m.scale.set(f[0], f[2], f[1]);
     m.position.set(pos[0], pos[2], -pos[1]);
     coalPile = new THREE.Group(); coalPile.add(m); coalPile.visible = false;
     dozerRoot.add(coalPile);
   }
   if (DATA.coal_heap) {
-    const m = coalMesh(4.1), f = DATA.coal_heap.full;
+    const m = coalMesh(4.1, "windrow"), f = DATA.coal_heap.full;
     m.scale.set(f[0], f[2], f[1]);
     coalHeap = new THREE.Group(); coalHeap.add(m); coalHeap.visible = false;
     coalHeap.position.fromArray(DATA.coal_heap.pos);
     coalHeap.rotation.y = DATA.coal_heap.rot_z;
     // the web terrain is decimated, so sit the heap on this terrain's own surface
-    if (terrainRoot) {
-      terrainRoot.updateMatrixWorld(true);
-      const p = coalHeap.position, ray = new THREE.Raycaster(new THREE.Vector3(p.x, p.y + 50, p.z), new THREE.Vector3(0, -1, 0));
-      const hit = ray.intersectObject(terrainRoot, true)[0];
-      if (hit) p.y = hit.point.y - 0.2;
-    }
+    sitOnTerrain(coalHeap.position);
     scene.add(coalHeap);
   }
+  (DATA.coal_static || []).forEach((c, k) => {
+    const m = coalMesh(7.3 + k, "cone"), f = c.full;
+    m.scale.set(f[0], f[2], f[1]);
+    m.position.fromArray(c.pos);
+    m.rotation.y = c.rot_z;
+    sitOnTerrain(m.position);
+    scene.add(m);
+  });
+}
+function sitOnTerrain(p) {
+  if (!terrainRoot) return;
+  terrainRoot.updateMatrixWorld(true);
+  const hit = new THREE.Raycaster(new THREE.Vector3(p.x, p.y + 50, p.z), new THREE.Vector3(0, -1, 0)).intersectObject(terrainRoot, true)[0];
+  if (hit) p.y = hit.point.y - 0.2;
 }
 function updateCoal(i) {
   for (const [obj, arr] of [[coalPile, DATA.coal], [coalHeap, DATA.heap]]) {
