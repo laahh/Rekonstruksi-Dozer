@@ -142,6 +142,7 @@
   /* annotation tags inside the 3D view */
   .lbl { font: 600 12.5px/1.3 var(--font); white-space: pre; text-align: center; padding: 2px 6px; border-radius: 4px; background: rgba(10, 12, 14, .78); transform: translateY(-50%); }
   .lbl.big { font-size: 14px; }
+  .poi.area { border-color: rgba(255, 150, 40, .7); }
   .poi { font: 600 12.5px/1.2 var(--font); color: #fff; white-space: nowrap; padding: 4px 8px; border-radius: 6px; background: rgba(16, 19, 22, .88); border: 1px solid rgba(255, 255, 255, .18); transform: translateY(-50%); }
 
   @media (max-width: 760px) {
@@ -164,7 +165,7 @@
   <div id="stage">
     <div class="labels-layer" id="labels"></div>
     <div class="view-info" aria-live="polite">
-      <div><span id="hudCam">360°</span> · <span id="hudVersion">Malam, 20.20</span></div>
+      <div><span id="hudCam">360°</span> · <span id="hudVersion">Malam</span></div>
       <div class="sub" id="hudPhase">Titik 1, Awal Shift</div>
     </div>
     <div class="north" title="Arah utara">
@@ -187,7 +188,7 @@
     <div class="panel-head">
       <div>
         <h1>Rekonstruksi Dozer</h1>
-        <p>Stockpile CPP, rute titik 1 ke 3</p>
+        <p>Stockpile CPP, rute titik 1 ke 4</p>
       </div>
       <button class="panel-toggle" id="sheetToggle" type="button" aria-expanded="true" aria-controls="sheetBody">Tutup</button>
     </div>
@@ -196,7 +197,7 @@
         <h2>Versi</h2>
         <div class="seg">
           <button type="button" id="btnDay" aria-pressed="false">Siang</button>
-          <button type="button" id="btnNight" aria-pressed="true">Malam, 20.20</button>
+          <button type="button" id="btnNight" aria-pressed="true">Malam</button>
         </div>
       </section>
 
@@ -282,8 +283,9 @@ const NIGHT_EV = 5.6;                       // same exposure boost as the Blende
 const LIGHT_SCALE = 1 / (4 * Math.PI);      // Blender watts -> three.js radiant intensity
 const POINTS = [
   { n: 1, frame: 1, name: "Dozing di Stockpile 1", time: "19.15 WITA" },
-  { n: 2, frame: 521, name: "Dozer MIJ-241 menuju Stockpile 2 untuk memotong kucuran", time: "19.30 WITA" },
-  { n: 3, frame: 723, name: "Dozer MIJ-241 terperosok ke lubang hopper", time: "20.20 WITA" },
+  { n: 2, frame: 521, name: "Diarahkan pengawas ke Stockpile 2 untuk memotong kucuran", time: "19.30 WITA" },
+  { n: 3, frame: 678, name: "Memotong kucuran di area Stockpile 2", time: "20.00 WITA" },
+  { n: 4, frame: 1021, name: "Terperosok ke lubang hopper, memanggil Pengawas RIC via radio", time: "20.10 WITA" },
 ];
 const CAMERAS = [
   ["Cam_Cinematic", "Cinematic", "1"], ["Cam_POV", "POV Operator", "2"], ["Cam_Atas", "Atas", "3"],
@@ -388,6 +390,7 @@ async function init() {
     else patchTerrain(o.material);
   });
   scene.add(terrain.scene);
+  terrainRoot = terrain.scene;
   buildTrees(trees.scene);
 
   dozerRoot = new THREE.Group();
@@ -400,6 +403,7 @@ async function init() {
     if (node) wheelNodes.push({ node, radius: w.radius, q0: node.quaternion.clone() });
   }
   buildTreads(treadUnits.scene);
+  buildCoal();
 
   poles.scene.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
   nightGroup.add(poles.scene);
@@ -468,6 +472,56 @@ function buildTrees(treeScene) {
       im.frustumCulled = false;
       realGroup.add(im);
     });
+  }
+}
+
+/* ---------- coal at the conveyor tip: load on the blade + heap left behind when reversing ---------- */
+let coalPile = null, coalHeap = null, terrainRoot = null;
+function coalMesh(seed) {
+  const geo = new THREE.IcosahedronGeometry(1, 4);
+  const p = geo.attributes.position, v = new THREE.Vector3();
+  const lump = (x, y, z) => Math.sin(x * 4.1 + y * 2.3 + seed) * Math.cos(z * 3.7 - x * 1.9) + 0.5 * Math.sin(y * 9.0 + z * 6.5 + seed);
+  for (let k = 0; k < p.count; k++) {
+    v.fromBufferAttribute(p, k);
+    v.multiplyScalar(1 + 0.09 * lump(v.x, v.y, v.z));
+    if (v.y < 0) v.y *= 0.6;               // keep a buried lower half so the pile sits into sloping ground
+    p.setXYZ(k, v.x, v.y, v.z);
+  }
+  geo.computeVertexNormals();
+  const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: 0x0b0b0a, roughness: 0.6, flatShading: true }));
+  mesh.castShadow = true; mesh.receiveShadow = true;
+  return mesh;
+}
+function buildCoal() {
+  if (DATA.coal_pile) {
+    const m = coalMesh(1.3), f = DATA.coal_pile.full, pos = DATA.coal_pile.pos;   // blender rig space -> three
+    m.scale.set(f[0], f[2], f[1]);
+    m.position.set(pos[0], pos[2], -pos[1]);
+    coalPile = new THREE.Group(); coalPile.add(m); coalPile.visible = false;
+    dozerRoot.add(coalPile);
+  }
+  if (DATA.coal_heap) {
+    const m = coalMesh(4.1), f = DATA.coal_heap.full;
+    m.scale.set(f[0], f[2], f[1]);
+    coalHeap = new THREE.Group(); coalHeap.add(m); coalHeap.visible = false;
+    coalHeap.position.fromArray(DATA.coal_heap.pos);
+    coalHeap.rotation.y = DATA.coal_heap.rot_z;
+    // the web terrain is decimated, so sit the heap on this terrain's own surface
+    if (terrainRoot) {
+      terrainRoot.updateMatrixWorld(true);
+      const p = coalHeap.position, ray = new THREE.Raycaster(new THREE.Vector3(p.x, p.y + 50, p.z), new THREE.Vector3(0, -1, 0));
+      const hit = ray.intersectObject(terrainRoot, true)[0];
+      if (hit) p.y = hit.point.y - 0.2;
+    }
+    scene.add(coalHeap);
+  }
+}
+function updateCoal(i) {
+  for (const [obj, arr] of [[coalPile, DATA.coal], [coalHeap, DATA.heap]]) {
+    if (!obj || !arr) continue;
+    const s = arr[Math.min(i, arr.length - 1)];
+    obj.visible = s > 0.01;
+    obj.scale.setScalar(s);
   }
 }
 
@@ -603,10 +657,30 @@ function buildAnnotations() {
     const s = new THREE.Mesh(new THREE.SphereGeometry(wp.radius, 20, 14), wpMat);
     s.position.fromArray(wp.pos);
     groups.titik.add(s);
-    titikLabels.push({ obj: s, from: 740 });
+    titikLabels.push({ obj: s, from: DATA.reveal_frame || 740 });
   }
   trailLine = makeLine(DATA.trail, [1.0, 0.82, 0.25], 4);
   groups.titik.add(trailLine);
+  // marked areas (e.g. the coal pile to be levelled): draped outline, translucent fill, name plate
+  for (const a of DATA.areas || []) {
+    groups.poi.add(makeLine(a.outline, a.color, 3));
+    const g = new THREE.BufferGeometry();
+    g.setAttribute("position", new THREE.Float32BufferAttribute(a.fill_verts.flat(), 3));
+    const idx = [];
+    for (const f of a.fill_faces) for (let k = 1; k < f.length - 1; k++) idx.push(f[0], f[k], f[k + 1]);
+    g.setIndex(idx);
+    const fill = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ color: new THREE.Color(...a.color), transparent: true, opacity: 0.22, depthWrite: false, side: THREE.DoubleSide, toneMapped: false }));
+    fill.renderOrder = 2;
+    groups.poi.add(fill);
+    groups.poi.add(makeLine([a.base, a.top], a.color, 2));
+    const el = document.createElement("div");
+    el.className = "poi area";
+    el.textContent = a.label;
+    const tag = new CSS2DObject(el);
+    tag.position.fromArray(a.top);
+    tag.center.set(0.5, 1.15);
+    groups.poi.add(tag);
+  }
   // place-name markers: thin pin from the ground to a name plate
   for (const p of DATA.pois || []) {
     groups.poi.add(makeLine([p.base, p.top], [0.95, 0.75, 0.2], 2));
@@ -618,6 +692,27 @@ function buildAnnotations() {
     tag.center.set(0.5, 1.15);
     groups.poi.add(tag);
   }
+}
+
+/* trail reveal: match the dozer's travelled path length (absolute, so reversing never runs ahead) */
+let travelled = null, trailCum = null;
+function trailSegsAt(i) {
+  if (!travelled) {
+    travelled = [0];
+    for (let k = 1; k < DATA.rig.length; k++) {
+      const a = DATA.rig[k - 1], b = DATA.rig[k];
+      travelled.push(travelled[k - 1] + Math.hypot(b[12] - a[12], b[13] - a[13], b[14] - a[14]));
+    }
+    trailCum = [0];
+    for (let k = 1; k < DATA.trail.length; k++) {
+      const a = DATA.trail[k - 1], b = DATA.trail[k];
+      trailCum.push(trailCum[k - 1] + Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]));
+    }
+  }
+  const s = travelled[i];
+  let lo = 0, hi = trailCum.length - 1;
+  while (lo < hi) { const m = (lo + hi + 1) >> 1; if (trailCum[m] <= s) lo = m; else hi = m - 1; }
+  return lo;
 }
 
 /* ---------- frame update ---------- */
@@ -634,10 +729,9 @@ function setFrame(f) {
     w.node.quaternion.copy(w.q0).multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, -1), dist / w.radius));
   }
   updateTreads(dist);
+  updateCoal(i);
 
-  const total = DATA.dist[DATA.dist.length - 1] || 1;
-  const segs = DATA.trail.length - 1;
-  trailLine.geometry.instanceCount = Math.max(0, Math.floor((dist / total) * segs));
+  trailLine.geometry.instanceCount = trailSegsAt(i);
   for (const t of titikLabels) t.obj.visible = f >= t.from;
 
   // keep the day sun's shadow box centred on the dozer
@@ -653,11 +747,8 @@ function setFrame(f) {
   $("scrub").value = Math.round(f);
   $("clockFrame").textContent = Math.round(f);
   $("clockTime").textContent = fmt((f - 1) / DATA.fps);
-  let phase = "1. Dozing di Stockpile 1, 19.15 WITA";
-  if (f >= POINTS[2].frame) phase = "3. Dozer MIJ-241 terperosok ke lubang hopper, 20.20 WITA";
-  else if (f >= 617) phase = "Menuju titik 3";
-  else if (f >= POINTS[1].frame) phase = "2. Menuju Stockpile 2 untuk memotong kucuran, 19.30 WITA";
-  else if (f > 48) phase = "Menuju titik 2";
+  let phase = "";
+  for (const p of DATA.phases || []) if (f >= p.from) phase = p.text;
   $("hudPhase").textContent = phase;
 }
 
@@ -715,7 +806,7 @@ function setVersion(night) {
   state.night = night;
   $("btnDay").setAttribute("aria-pressed", String(!night));
   $("btnNight").setAttribute("aria-pressed", String(night));
-  $("hudVersion").textContent = night ? "Malam, 20.20" : "Siang";
+  $("hudVersion").textContent = night ? "Malam" : "Siang";
   dayGroup.visible = !night;
   nightGroup.visible = night;
   for (const l of nightLights) l.visible = night;
