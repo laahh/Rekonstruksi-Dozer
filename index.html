@@ -89,6 +89,8 @@
   .cell[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
   .cell kbd { font: inherit; font-size: 11.5px; opacity: .65; font-variant-numeric: tabular-nums; }
   .cell.wide { grid-column: 1 / -1; }
+  .side-btn { width: 100%; }
+  .side-btn:disabled { opacity: .6; cursor: progress; }
 
   .num { flex: none; width: 20px; height: 20px; border-radius: 5px; background: var(--raised); color: var(--text); display: grid; place-items: center; font-size: 11.5px; font-weight: 600; }
 
@@ -340,6 +342,12 @@
       </section>
 
       <section class="sec">
+        <h2>Tampak samping</h2>
+        <button type="button" class="cell side-btn" id="btnSide" aria-pressed="false"><span>Tampak Samping (belah Hopper 2C)</span><kbd>t</kbd></button>
+        <p class="note" id="sideNote" hidden>Stockpile dibelah di lubang Hopper 2C: terowongan reclaim, hopper dan belt conveyor CV-35 di bawahnya. Seret untuk memutar, scroll untuk zoom.</p>
+      </section>
+
+      <section class="sec">
         <h2>Titik rute</h2>
         <div class="list" id="points"></div>
       </section>
@@ -371,6 +379,7 @@
           <kbd>← →</kbd><span>mundur / maju 1 detik</span>
           <kbd>1-9</kbd><span>ganti kamera</span>
           <kbd>0</kbd><span>kamera 360°</span>
+          <kbd>t</kbd><span>tampak samping</span>
         </div>
       </details>
     </div>
@@ -528,6 +537,7 @@ async function init() {
   scene.add(dozerRoot);
   dozer.scene.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
   dozerRoot.add(dozer.scene);
+  dozerModel = dozer.scene;
   for (const w of DATA.wheels) {
     const node = dozer.scene.getObjectByName(sanitize(w.name));
     if (node) wheelNodes.push({ node, radius: w.radius, q0: node.quaternion.clone() });
@@ -551,7 +561,8 @@ async function init() {
   setVersion(true);
   setCamera("free");
   setFrame(1);
-  window.viewer = { setFrame, setCamera, setVersion, setReal: (r) => { state.real = r; applyLook(); }, ready: true };
+  $("btnSide").hidden = !DATA.side_view;
+  window.viewer = { setFrame, setCamera, setVersion, setSide, setReal: (r) => { state.real = r; applyLook(); }, ready: true };
 }
 
 /* ---------- realistic terrain: same colour logic as the Blender material ----------
@@ -958,7 +969,7 @@ function setFrame(f) {
   $("clockTime").textContent = fmt((f - 1) / DATA.fps);
   let phase = "";
   for (const p of DATA.phases || []) if (f >= p.from) phase = p.text;
-  $("hudPhase").textContent = phase;
+  if (!side.on) $("hudPhase").textContent = phase;
 }
 
 let lastFollow = null;
@@ -991,8 +1002,94 @@ function updateNorth() {
   $("northArrow").setAttribute("transform", `rotate(${(-heading * 180) / Math.PI} 22 22)`);
 }
 
+/* ---------- side view: the stockpile split along hopper 2C, showing the reclaim tunnel underneath ----------
+   The site (terrain, trees) is clipped at the section plane (Blender y = clip_y, three z = -clip_y); the cut
+   faces, tunnel, hoppers, conveyor and labels come from section.glb; the dozer is a static clone posed 54 deg. */
+let dozerModel = null;
+const side = { on: false, group: null, saved: null };
+const sidePlane = new THREE.Plane(new THREE.Vector3(0, 0, -1), 0);   // keeps z <= constant
+renderer.localClippingEnabled = true;
+
+function clipSite(on) {
+  for (const root of [terrainRoot, realGroup]) {
+    root?.traverse((o) => {
+      if (!o.material) return;
+      for (const m of [].concat(o.material)) { m.clippingPlanes = on ? [sidePlane] : null; m.clipShadows = on; m.needsUpdate = true; }
+    });
+  }
+}
+
+async function buildSide() {
+  const sv = DATA.side_view;
+  const g = (await loadGLB(sv.glb)).scene;
+  g.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+  const dz = new THREE.Group();
+  dz.matrixAutoUpdate = false;
+  dz.matrix.fromArray(sv.dozer);
+  dz.add(dozerModel.clone(true));
+  for (const t of treads) dz.add(t.inst.clone());
+  g.add(dz);
+  for (const L of sv.tunnel_lights) {
+    const p = new THREE.PointLight(0xfff2d9, L.energy * LIGHT_SCALE * 2, 16, 2);
+    p.position.fromArray(L.pos);
+    g.add(p);
+  }
+  return g;
+}
+
+async function setSide(on) {
+  if (on === side.on || !DATA?.side_view) return;
+  const btn = $("btnSide"), label = btn.querySelector("span");
+  if (on && !side.group) {
+    btn.disabled = true;
+    label.textContent = "Memuat tampak samping...";
+    try { side.group = await buildSide(); scene.add(side.group); }
+    finally { btn.disabled = false; }
+  }
+  side.on = on;
+  btn.setAttribute("aria-pressed", String(on));
+  label.textContent = on ? "Kembali ke tampilan 3D" : "Tampak Samping (belah Hopper 2C)";
+  $("sideNote").hidden = !on;
+  if (on) {
+    if (state.playing) togglePlay();
+    side.saved = { night: state.night, real: state.real, cam: state.cam };
+    sidePlane.constant = -DATA.side_view.clip_y;
+    setVersion(false);
+    state.real = true; applyLook();
+    clipSite(true);
+    side.group.visible = true;
+    dozerRoot.visible = false;
+    trailLine.visible = false;
+    Object.values(groups).forEach((g) => (g.visible = false));
+    // camera: the Blender side-view camera, then orbit around the cut
+    state.cam = "side";
+    controls.enabled = true;
+    $("freeBox").hidden = true;
+    for (const b of $("cams").children) b.setAttribute("aria-pressed", "false");
+    _cam.fromArray(DATA.side_view.camera);
+    _cam.decompose(camera.position, camera.quaternion, camera.scale);
+    const hfov = 2 * Math.atan(18 / DATA.side_view.lens);
+    camera.fov = THREE.MathUtils.radToDeg(camera.aspect >= 1 ? 2 * Math.atan(Math.tan(hfov / 2) / camera.aspect) : hfov);
+    camera.updateProjectionMatrix();
+    const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+    controls.target.copy(camera.position).addScaledVector(fwd, 27);
+    controls.update();
+    $("hudCam").textContent = "Tampak Samping";
+    $("hudPhase").textContent = "Stockpile dibelah di lubang Hopper 2C, terlihat terowongan reclaim dan belt conveyor CV-35";
+  } else {
+    side.group.visible = false;
+    clipSite(false);
+    dozerRoot.visible = true;
+    trailLine.visible = true;
+    state.real = side.saved.real;
+    setVersion(side.saved.night);
+    setCamera(side.saved.cam);
+  }
+}
+
 /* ---------- UI ---------- */
 function setCamera(name) {
+  if (side.on && name !== "side") { setSide(false); if (side.saved?.cam === name) return; }
   state.cam = name;
   const free = name === "free";
   controls.enabled = free;
@@ -1076,7 +1173,8 @@ function buildUI() {
   $("btnNight").addEventListener("click", () => setVersion(true));
   $("btnReal").addEventListener("click", () => { state.real = true; applyLook(); });
   $("btnAsli").addEventListener("click", () => { state.real = false; applyLook(); });
-  $("play").addEventListener("click", togglePlay);
+  $("play").addEventListener("click", () => { if (side.on) setSide(false); togglePlay(); });
+  $("btnSide").addEventListener("click", () => setSide(!side.on).catch(fail));
   for (const b of document.querySelectorAll(".speed button")) {
     b.addEventListener("click", () => {
       state.speed = Number(b.dataset.speed);
@@ -1098,6 +1196,7 @@ function buildUI() {
     else if (e.key === "ArrowRight") setFrame(state.frame + DATA.fps);
     else if (e.key === "ArrowLeft") setFrame(state.frame - DATA.fps);
     else if (e.key === "0") setCamera("free");
+    else if (e.key === "t" || e.key === "T") setSide(!side.on).catch(fail);
     else { const c = CAMERAS.find((x) => x[2] && x[2] === e.key); if (c) setCamera(c[0]); }
   });
 }
@@ -1149,7 +1248,7 @@ function tick(now) {
     if (next >= DATA.frame_end) { setFrame(DATA.frame_end); togglePlay(); }
     else setFrame(next);
   }
-  if (state.cam === "free") controls.update();
+  if (state.cam === "free" || side.on) controls.update();
   renderer.render(scene, camera);
   labelRenderer.render(scene, camera);
   updateNorth();
